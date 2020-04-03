@@ -1310,7 +1310,6 @@ class TestSpecialEuclideanMethods(geomstats.tests.TestCase):
         #             if geomstats.tests.tf_backend():
         #                 break
 
-    # @geomstats.tests.np_only
     def test_inner_product_at_identity_vectorization(self):
         n_samples = self.n_samples
         for metric in self.metrics.values():
@@ -1331,7 +1330,6 @@ class TestSpecialEuclideanMethods(geomstats.tests.TestCase):
             result = metric.inner_product(n_vector_a, n_vector_b)
             self.assertAllClose(gs.shape(result), (n_samples, 1))
 
-    # @geomstats.tests.np_only
     def test_inner_product_one_base_point_vectorization(self):
         n_samples = self.n_samples
         for metric in self.metrics.values():
@@ -1357,7 +1355,6 @@ class TestSpecialEuclideanMethods(geomstats.tests.TestCase):
                                           one_base_point)
             self.assertAllClose(gs.shape(result), (n_samples, 1))
 
-    # @geomstats.tests.np_only
     def test_inner_product_n_base_point_vectorization(self):
         n_samples = self.n_samples
         for metric in self.metrics.values():
@@ -1414,7 +1411,6 @@ class TestSpecialEuclideanMethods(geomstats.tests.TestCase):
                     if geomstats.tests.tf_backend():
                         break
 
-    # @geomstats.tests.np_only
     def test_squared_dist_vectorization(self):
         n_samples = self.n_samples
         for metric_type in self.metrics:
@@ -1454,7 +1450,6 @@ class TestSpecialEuclideanMethods(geomstats.tests.TestCase):
             result = metric.squared_dist(n_point_1, n_point_2)
             self.assertAllClose(gs.shape(result), (n_samples, 1))
 
-    # @geomstats.tests.np_only
     def test_dist_vectorization(self):
         n_samples = self.n_samples
         for metric_type in self.metrics:
@@ -1493,7 +1488,6 @@ class TestSpecialEuclideanMethods(geomstats.tests.TestCase):
             result = metric.dist(n_point_1, n_point_2)
             self.assertAllClose(gs.shape(result), (n_samples, 1))
 
-    # @geomstats.tests.np_only
     def test_group_exponential_barycenter(self):
         """Test group exponential barycenter."""
         # FIXME
@@ -1521,7 +1515,6 @@ class TestSpecialEuclideanMethods(geomstats.tests.TestCase):
 
         #     self.assertTrue(self.group.belongs(result_3))
 
-    # @geomstats.tests.np_only
     def test_geodesic_and_belongs(self):
         initial_point = self.group.random_uniform()
         initial_tangent_vec = gs.array([2., 0., -1., 0., 2., 3.])
@@ -1535,7 +1528,6 @@ class TestSpecialEuclideanMethods(geomstats.tests.TestCase):
         expected = True
         self.assertAllClose(result, expected)
 
-    # @geomstats.tests.np_only
     def test_geodesic_subsample(self):
         initial_point = gs.array([-1.1, 0., 0.99, 10., 2., 3.])
         initial_tangent_vec = gs.array([1., 0., 2., 1., 1., 1.])
