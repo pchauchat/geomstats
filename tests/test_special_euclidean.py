@@ -399,7 +399,7 @@ class TestSpecialEuclideanMethods(geomstats.tests.TestCase):
             expected = helper.to_vector(expected)
             self.assertAllClose(result, expected)
 
-    @geomstats.tests.np_only
+    # @geomstats.tests.np_only
     def test_compose_and_inverse_matrix_form(self):
         old_point_type = self.group.default_point_type
         self.group.default_point_type = 'matrix'
@@ -450,7 +450,6 @@ class TestSpecialEuclideanMethods(geomstats.tests.TestCase):
                 gs.shape(result),
                 (n_samples, *self.group.get_point_type_shape()))
 
-    @geomstats.tests.np_only
     def test_compose_vectorization_matrix_form(self):
         old_point_type = self.group.default_point_type
         self.group.default_point_type = 'matrix'
@@ -466,7 +465,6 @@ class TestSpecialEuclideanMethods(geomstats.tests.TestCase):
         self.assertAllClose(
             gs.shape(result), (n_samples, *self.group.get_point_type_shape()))
 
-    @geomstats.tests.np_only
     def test_inverse_vectorization_matrix_form(self):
         old_point_type = self.group.default_point_type
         self.group.default_point_type = 'matrix'
