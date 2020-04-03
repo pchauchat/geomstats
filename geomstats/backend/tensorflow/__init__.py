@@ -57,24 +57,14 @@ def _mask_from_indices(indices, mask_shape, dtype=float32):
     tf_mask : array, shape=[mask_shape]
     """
     np_mask = _np.zeros(mask_shape)
-    single_index = not isinstance(indices, list)
-
-    if single_index:
-        indices = [indices]
 
     for (nb_index, index) in enumerate(indices):
         if not isinstance(index, tuple):
             indices[nb_index] = (index,)
 
-    if single_index:
-        if len(indices) != len(mask_shape):
-            raise ValueError('The index must have the same size as shape')
-        indices = [indices]
-
-    else:
-        for index in indices:
-            if len(index) != len(mask_shape):
-                raise ValueError('Indices must have the same size as shape')
+    for index in indices:
+        if len(index) != len(mask_shape):
+            raise ValueError('Indices must have the same size as shape')
 
     for index in indices:
         np_mask[index] = 1
@@ -200,17 +190,16 @@ def assignment_by_sum(x, values, indices, axis=0):
     if not isinstance(values, list):
         return __assignment_single_value_by_sum(x, values, indices, axis)
 
-    else:
-        if not isinstance(indices, list):
-            indices = [indices]
+    if not isinstance(indices, list):
+        indices = [indices]
 
-        if len(values) != len(indices):
-            raise ValueError('Either one value or as many values as indices')
+    if len(values) != len(indices):
+        raise ValueError('Either one value or as many values as indices')
 
-        for (nb_index, index) in enumerate(indices):
-            x = __assignment_single_value_by_sum(
-                x, values[nb_index], index, axis)
-        return x
+    for (nb_index, index) in enumerate(indices):
+        x = __assignment_single_value_by_sum(
+            x, values[nb_index], index, axis)
+    return x
 
 
 def _assignment_single_value(x, value, indices, axis=0):
@@ -286,16 +275,15 @@ def assignment(x, values, indices, axis=0):
     if not isinstance(values, list):
         return _assignment_single_value(x, values, indices, axis)
 
-    else:
-        if not isinstance(indices, list):
-            indices = [indices]
+    if not isinstance(indices, list):
+        indices = [indices]
 
-        if len(values) != len(indices):
-            raise ValueError('Either one value or as many values as indices')
+    if len(values) != len(indices):
+        raise ValueError('Either one value or as many values as indices')
 
-        for (nb_index, index) in enumerate(indices):
-            x = _assignment_single_value(x, values[nb_index], index, axis)
-        return x
+    for (nb_index, index) in enumerate(indices):
+        x = _assignment_single_value(x, values[nb_index], index, axis)
+    return x
 
 
 def array_from_sparse(indices, data, target_shape):
