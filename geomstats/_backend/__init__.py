@@ -77,6 +77,7 @@ BACKEND_ATTRIBUTES = {
         'repeat',
         'reshape',
         'searchsorted',
+        'set_diag',
         'shape',
         'sign',
         'sin',
@@ -114,7 +115,6 @@ BACKEND_ATTRIBUTES = {
         'norm',
         'powerm',
         'qr',
-        'set_diag',
         'sqrtm',
         'svd'
     ],
