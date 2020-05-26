@@ -47,31 +47,18 @@ class LocalizationLinear:
     def noise_jacobian(self, state, sensor_input):
         dt, _ = sensor_input
         return gs.sqrt(dt) * gs.eye(self.dim, self.dim_noise)
-        # return dt * gs.eye(self.dim_noise)
 
     def observation_jacobian(self, state, observation):
-        return gs.eye(2, 3, 1)
+        return gs.eye(1, 2, 1)
 
     def get_measurement_noise_cov(self, state, observation_cov):
-        theta, _, _ = self.split_state(state)
-        rot = self.rotation_matrix(theta)
-        if gs.ndim(state) > 1:
-            return gs.einsum('ijk, ikl, ilm -> ijm', rot, observation_cov,
-                             rot.transpose(0, 2, 1))
-        return rot.T.dot(observation_cov).dot(rot)
+        return observation_cov
 
     def innovation(self, state, observation):
-        theta, _, _ = self.split_state(state)
-        rot = self.rotation_matrix(theta)
-        return rot.T.dot(observation - state[1:])
+        return observation - state[1:]
 
 
 class Localization:
-    group = SpecialEuclidean(2, 'vector')
-    dim = group.dim
-    dim_noise = 3
-    dim_obs = 2
-
     @staticmethod
     def split_state(state):
         if gs.ndim(state) == 1:
@@ -116,6 +103,7 @@ class Localization:
         self.group = SpecialEuclidean(2, 'vector')
         self.dim = self.group.dim
         self.dim_noise = 3
+        self.dim_obs = 2
 
     def ad_chi(self, state):
         ''' Returns the tangent map associated to Ad_X : g |-> XgX^-1'''
@@ -158,8 +146,7 @@ class Localization:
 
     def noise_jacobian(self, state, input):
         dt, _, _ = self.split_input(input)
-        return gs.sqrt(dt) * gs.eye(self.dim_noise)
-        # return dt * gs.eye(self.dim_noise)
+        return dt * gs.eye(self.dim_noise)
 
     def observation_jacobian(self, state, observation):
         return gs.eye(2, 3, 1)
@@ -176,42 +163,6 @@ class Localization:
         theta, _, _ = self.split_state(state)
         rot = self.rotation_matrix(theta)
         return rot.T.dot(observation - state[1:])
-
-
-class LocalizationEKF(Localization):
-
-    def update(self, state, vector):
-        new_state = gs.zeros_like(state)
-        new_state[0] = self.regularize_angle(state[0] + vector[0])
-        new_state[1:] = state[1:] + vector[1:]
-        return new_state
-
-    def propagation_jacobian(self, state, input):
-        ''' Returns the jacobian associated to the variable i for the propagation factor
-            f(X_i)^{-1} X_{i+1}, where f depends on the input u.
-            More precisely, it is the jacobian of the tangent map at the identity
-            of g(X) = f(I)^{-1} f(X) '''
-        dt, linear_speed, angular_speed = self.split_input(input)
-        theta, _, _ = self.split_state(state)
-        rot = self.rotation_matrix(theta)
-        ortho_linear_speed = [-linear_speed[1], linear_speed[0]]
-        jacobian = gs.eye(self.dim)
-        jacobian[1:, 0] = dt*rot.dot(ortho_linear_speed)
-
-        return jacobian
-
-    def noise_jacobian(self, state, input):
-        dt, _, _ = self.split_input(input)
-        theta, _, _ = self.split_state(state)
-        rot = self.rotation_matrix(theta)
-        speed_jacobian = block_diag(1, rot)
-        return gs.sqrt(dt) * speed_jacobian
-
-    def get_measurement_noise_cov(self, state, observation_cov):
-        return observation_cov
-
-    def innovation(self, state, observation):
-        return observation - state[1:]
 
 
 class KalmanFilter:
@@ -288,7 +239,6 @@ class KalmanFilter:
 
 
 model = Localization()
-# model = LocalizationEKF()
 filter = KalmanFilter(model)
 
 true_state = gs.array([0, 0, 0])
@@ -311,7 +261,7 @@ plt.plot(true_traj[:,1], true_traj[:,2], label='GT')
 np.random.seed(12345)
 inputs = [gs.concatenate(([0.1], np.random.multivariate_normal(incr[1:], 0.001*gs.eye(3)))) for incr in true_inputs]
 true_obs = [pose[1:] for pose in true_traj[obs_freq::obs_freq]]
-obs = [1.2*np.random.multivariate_normal(pos, 0.01*gs.eye(2)) for pos in true_obs]
+obs = [np.random.multivariate_normal(pos, 0.01*gs.eye(2)) for pos in true_obs]
 
 def estimation(observer, initial_covs, initial_state, inputs, obs):
     observer.initialise_covariances(*initial_covs)
