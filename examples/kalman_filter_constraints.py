@@ -282,20 +282,25 @@ class Localization:
         elif mode == 'both':
             distance_dir, _ = self.get_constraint(state, mode='distance')
             angle_dir, _ = self.get_constraint(state, mode='angle')
+            n_states = angle_dir.shape[0]
             if gs.ndim(state) > 1:
                 n_states = state.shape[0]
+                angle_dir = gs.concatenate((gs.zeros(
+                    (n_states, 2, 1)), angle_dir[:, :2], gs.zeros((n_states, 2 * (self.nb_gps - 2), 1))), axis=1)
                 constraint_direction = gs.concatenate(
-                    (distance_dir[:, :2], angle_dir[:, :2]), axis=1)
-                other_gps = gs.zeros((n_states, 2 * (self.nb_gps - 2), 1))
-                constraint_direction = gs.concatenate(
-                    (constraint_direction, other_gps), axis=1)
+                    (distance_dir, angle_dir), axis=2)
+                # other_gps = gs.zeros((n_states, 2 * (self.nb_gps - 2), 1))
+                # constraint_direction = gs.concatenate(
+                #     (constraint_direction, other_gps), axis=1)
             else:
                 constraint_direction = gs.concatenate(
                     (distance_dir[:2], angle_dir[:2]))
-                other_gps = gs.zeros((2 * (self.nb_gps - 2), 1))
-                constraint_direction = gs.vstack((constraint_direction,
-                                                 other_gps))
-            constrained_value = gs.zeros((self.dim, 1))
+                angle_dir = gs.vstack((gs.zeros((2, 1)), angle_dir[:2], gs.zeros((2 * (self.nb_gps - 2), 1))))
+                constraint_direction = gs.hstack((distance_dir, angle_dir))
+                # other_gps = gs.zeros((2 * (self.nb_gps - 2), 1))
+                # constraint_direction = gs.vstack((constraint_direction,
+                #                                  other_gps))
+            constrained_value = gs.zeros((self.dim, 2))
         else:
             raise ValueError('Constraint not implemented')
 
@@ -590,7 +595,7 @@ class KalmanFilterConstraints(KalmanFilter):
             self.state = self.model.update(self.state, state_gain.dot(innovation))
 
 
-nb_gps = 3
+nb_gps = 2
 corruption_mode = 'both'
 model = Localization(nb_gps=nb_gps)
 # model = LocalizationEKF(nb_gps=nb_gps)
@@ -617,9 +622,9 @@ true_state = gs.array([0, 0, 0])
 # initial_state = true_state + 2*np.diag(P0)
 initial_state = true_state + np.random.multivariate_normal([0,0,0], P0)
 
-# true_inputs = [gs.array([dt, 0.5, 0.5, 0.1]) for _ in range(n_traj)]
+true_inputs = [gs.array([dt, 0.5, 0.5, 0.1]) for _ in range(n_traj)]
 # true_inputs = [gs.array([dt, .2, 0., 0.]) for _ in range(n_traj)]
-true_inputs = [gs.array([dt, .2, 0., 0.]) for _ in range(n_traj//2)] + [gs.array([0.1, 0., -.2, 0.]) for _ in range(n_traj//2, n_traj)]
+# true_inputs = [gs.array([dt, .2, 0., 0.]) for _ in range(n_traj//2)] + [gs.array([0.1, 0., -.2, 0.]) for _ in range(n_traj//2, n_traj)]
 
 
 true_traj = [1*true_state]
