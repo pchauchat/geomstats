@@ -282,24 +282,15 @@ class Localization:
         elif mode == 'both':
             distance_dir, _ = self.get_constraint(state, mode='distance')
             angle_dir, _ = self.get_constraint(state, mode='angle')
-            n_states = angle_dir.shape[0]
             if gs.ndim(state) > 1:
                 n_states = state.shape[0]
                 angle_dir = gs.concatenate((gs.zeros(
                     (n_states, 2, 1)), angle_dir[:, :2], gs.zeros((n_states, 2 * (self.nb_gps - 2), 1))), axis=1)
                 constraint_direction = gs.concatenate(
                     (distance_dir, angle_dir), axis=2)
-                # other_gps = gs.zeros((n_states, 2 * (self.nb_gps - 2), 1))
-                # constraint_direction = gs.concatenate(
-                #     (constraint_direction, other_gps), axis=1)
             else:
-                constraint_direction = gs.concatenate(
-                    (distance_dir[:2], angle_dir[:2]))
                 angle_dir = gs.vstack((gs.zeros((2, 1)), angle_dir[:2], gs.zeros((2 * (self.nb_gps - 2), 1))))
                 constraint_direction = gs.hstack((distance_dir, angle_dir))
-                # other_gps = gs.zeros((2 * (self.nb_gps - 2), 1))
-                # constraint_direction = gs.vstack((constraint_direction,
-                #                                  other_gps))
             constrained_value = gs.zeros((self.dim, 2))
         else:
             raise ValueError('Constraint not implemented')
@@ -404,9 +395,14 @@ class LocalizationEKF(Localization):
                 n_states = state.shape[0]
                 constraint_direction = state[:, 1:].reshape(
                     n_states, 2, 1)
+                other_gps = gs.zeros((n_states, 2 * (self.nb_gps - 1), 1))
+                constraint_direction = gs.concatenate(
+                    (constraint_direction, other_gps), axis=1)
                 constrained_value = gs.zeros((state.shape[0], self.dim, 1))
                 return constraint_direction, constrained_value
             constraint_direction = state[1:].reshape(2, 1)
+            other_gps = gs.zeros((2 * (self.nb_gps - 1), 1))
+            constraint_direction = gs.vstack((constraint_direction, other_gps))
             constrained_value = gs.zeros((self.dim, 1))
         elif mode == 'angle':
             tangent_base = gs.array([[0, -1],
@@ -414,19 +410,31 @@ class LocalizationEKF(Localization):
             if gs.ndim(state) > 1:
                 n_states = state.shape[0]
                 constraint_direction = gs.matmul(tangent_base, state[:, 1:].reshape(n_states, 2, 1))
+                other_gps = gs.zeros((n_states, 2 * (self.nb_gps - 1), 1))
+                constraint_direction = gs.concatenate(
+                    (constraint_direction, other_gps), axis=1)
                 constrained_value = gs.zeros((state.shape[0], self.dim, 1))
                 return constraint_direction, constrained_value
             constraint_direction = (
                 tangent_base.dot(state[1:])).reshape(2, 1)
+            other_gps = gs.zeros((2 * (self.nb_gps - 1), 1))
+            constraint_direction = gs.vstack((constraint_direction, other_gps))
             constrained_value = gs.zeros((self.dim, 1))
         elif mode == 'both':
             distance_dir, _ = self.get_constraint(state, mode='distance')
             angle_dir, _ = self.get_constraint(state, mode='angle')
-            if gs.ndim(distance_dir) > 2:
-                constraint_direction = gs.concatenate((distance_dir, angle_dir), axis=1)
+            if gs.ndim(state) > 1:
+                n_states = state.shape[0]
+                angle_dir = gs.concatenate((gs.zeros(
+                    (n_states, 2, 1)), angle_dir[:, :2], gs.zeros(
+                    (n_states, 2 * (self.nb_gps - 2), 1))), axis=1)
+                constraint_direction = gs.concatenate(
+                    (distance_dir, angle_dir), axis=2)
             else:
-                constraint_direction = gs.concatenate((distance_dir, angle_dir))
-            constrained_value = gs.zeros((self.dim, 1))
+                angle_dir = gs.vstack((gs.zeros((2, 1)), angle_dir[:2],
+                                       gs.zeros((2 * (self.nb_gps - 2), 1))))
+                constraint_direction = gs.hstack((distance_dir, angle_dir))
+            constrained_value = gs.zeros((self.dim, 2))
         else:
             raise ValueError('Constraint not implemented')
 
@@ -587,12 +595,17 @@ class KalmanFilterConstraints(KalmanFilter):
             self.covariance = kalman_cov_upd + projection_upd
             state_upd = gs.einsum('ijk, ik -> ij', state_gain, innovation)
             self.state = self.model.update(self.state, state_upd)
+            # covariance_correction = self.model.ad_chi(state_upd)
+            # self.covariance = gs.einsum('ijk, ikl, ilm -> ijm', covariance_correction, self.covariance,
+            #                      covariance_correction.transpose(0, 2, 1))
         else:
             kalman_cov_upd = (gs.eye(self.model.dim) - kalman_gain.dot(H)).dot(
                 self.covariance)
             self.covariance = kalman_cov_upd + kalman_gain.dot(projection_term).dot(
                 kalman_gain.T)
             self.state = self.model.update(self.state, state_gain.dot(innovation))
+            # covariance_correction = self.model.ad_chi(state_gain.dot(innovation))
+            # self.covariance = covariance_correction.dot(self.covariance).dot(covariance_correction.T)
 
 
 nb_gps = 2
@@ -638,7 +651,7 @@ true_obs = [pose[1:] for pose in true_traj[obs_freq::obs_freq]]
 plt.figure()
 plt.plot(true_traj[:,1], true_traj[:,2], label='GT')
 
-# np.random.seed(12345)
+np.random.seed(12345)
 inputs = [gs.concatenate((incr[:1], np.random.multivariate_normal(incr[1:], Q))) for incr in true_inputs]
 obs = [model.corrupt_measure(gs.tile(meas, nb_gps), corruption_value) for meas in true_obs]
 obs = [np.random.multivariate_normal(meas, N) for meas in obs]
