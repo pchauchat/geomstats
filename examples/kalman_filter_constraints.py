@@ -107,7 +107,8 @@ class Localization:
         self.dim_noise = 3
         self.nb_gps = nb_gps
         self.dim_obs = 2 * nb_gps
-        self.corruption_mode = 'None'
+        self.obs_corruption_mode = 'None'
+        self.input_corruption_mode = 'None'
 
     def ad_chi(self, state):
         ''' Returns the tangent map associated to Ad_X : g |-> XgX^-1'''
@@ -243,7 +244,7 @@ class Localization:
 
     def get_constraint(self, state, mode=None):
         if mode is None:
-            mode = self.corruption_mode
+            mode = self.obs_corruption_mode
         if mode == 'distance':
             if gs.ndim(state) > 1:
                 n_states = state.shape[0]
@@ -297,18 +298,20 @@ class Localization:
 
         return constraint_direction, constrained_value
 
-    def set_corruption_mode(self, mode):
-        if mode in ['distance', 'angle', 'both']:
-            self.corruption_mode = mode
-        elif mode in ['both']:
-            self.corruption_mode = mode
+    def set_corruption_modes(self, obs_mode, input_mode):
+        if obs_mode in ['distance', 'angle', 'both']:
+            self.obs_corruption_mode = obs_mode
+        else:
+            raise ValueError('Constraint not implemented')
+        if input_mode in ['rotation']:
+            self.input_corruption_mode = input_mode
         else:
             raise ValueError('Constraint not implemented')
 
     def corrupt_measure(self, observation, value, mode=None):
         corrupted_obs = 1 * observation
         if mode is None:
-            mode = self.corruption_mode
+            mode = self.obs_corruption_mode
         if mode == 'None':
             pass
         elif mode == 'distance':
@@ -323,6 +326,19 @@ class Localization:
             raise ValueError('Constraint not implemented')
         return corrupted_obs
 
+    def corrupt_input(self, input, value, mode=None):
+        dt, linear_vel, angular_vel = self.split_input(input)
+        corrupted_lin_vel = 1 * linear_vel
+        corrupted_ang_vel = 1 * angular_vel
+        if mode is None:
+            mode = self.input_corruption_mode
+        if mode == 'None':
+            pass
+        elif mode == 'rotation':
+            corrupted_lin_vel = self.rotation_matrix(value).dot(corrupted_lin_vel)
+        else:
+            raise ValueError('Constraint not implemented')
+        return gs.concatenate(([dt], corrupted_lin_vel, [corrupted_ang_vel]))
 
 class LocalizationEKF(Localization):
 
@@ -389,7 +405,7 @@ class LocalizationEKF(Localization):
 
     def get_constraint(self, state, mode=None):
         if mode is None:
-            mode = self.corruption_mode
+            mode = self.obs_corruption_mode
         if mode == 'distance':
             if gs.ndim(state) > 1:
                 n_states = state.shape[0]
@@ -609,7 +625,7 @@ class KalmanFilterConstraints(KalmanFilter):
 
 
 nb_gps = 2
-corruption_mode = 'both'
+obs_corruption_mode = 'both'
 model = Localization(nb_gps=nb_gps)
 # model = LocalizationEKF(nb_gps=nb_gps)
 filter = KalmanFilter(model)
@@ -623,11 +639,11 @@ P0 = np.diag(P0)
 # Q = np.diag([1e-4, 1e-4, 1e-6])
 Q = 0.001 * gs.eye(3)
 N = 0.01 * gs.eye(2 * nb_gps)
-corruption_values = {'distance' : 1.2,
+obs_corruption_values = {'distance' : 1.2,
                      'angle' : -0.1}
-corruption_values['both'] = [corruption_values['distance'], corruption_values['angle']]
-model.set_corruption_mode(corruption_mode)
-corruption_value = corruption_values[corruption_mode]
+obs_corruption_values['both'] = [obs_corruption_values['distance'], obs_corruption_values['angle']]
+model.set_obs_corruption_mode(obs_corruption_mode)
+obs_corruption_value = obs_corruption_values[obs_corruption_mode]
 initial_covs = (P0, Q, N)
 
 true_state = gs.array([0, 0, 0])
@@ -653,7 +669,7 @@ plt.plot(true_traj[:,1], true_traj[:,2], label='GT')
 
 np.random.seed(12345)
 inputs = [gs.concatenate((incr[:1], np.random.multivariate_normal(incr[1:], Q))) for incr in true_inputs]
-obs = [model.corrupt_measure(gs.tile(meas, nb_gps), corruption_value) for meas in true_obs]
+obs = [model.corrupt_measure(gs.tile(meas, nb_gps), obs_corruption_value) for meas in true_obs]
 obs = [np.random.multivariate_normal(meas, N) for meas in obs]
 
 
@@ -712,7 +728,7 @@ initial_state_vectorized = gs.array([
 inputs_vectorized = gs.array([[gs.concatenate((incr[:1], np.random.multivariate_normal(incr[1:], Q))) for incr in true_inputs] for _ in range(n_MC)])
 obs_vectorized = [
     [model.corrupt_measure(
-        np.random.multivariate_normal(gs.tile(pos, nb_gps), N), corruption_value)
+        np.random.multivariate_normal(gs.tile(pos, nb_gps), N), obs_corruption_value)
         for pos in true_obs] for _ in range(n_MC)]
 obs_vectorized = gs.array(obs_vectorized)
 
