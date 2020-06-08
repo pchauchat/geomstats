@@ -246,13 +246,21 @@ class Localization:
     def _get_input_constraint(self, state, incr, input_mode):
         if input_mode == 'rotation':
             _, pos_incr, ang_incr = self.split_input(incr)
-            rot = self.rotation_matrix(- ang_incr)
             tangent_base = gs.array([[0, -1],
                                      [1, 0]])
-            constraint_direction_one_gps = gs.hstack(
-                (rot.dot(pos_incr).reshape(2, 1),
-                 tangent_base.dot(pos_incr).reshape(2, 1)))
-            constrained_value = gs.vstack((gs.zeros((self.group.rotations.dim, self.group.n)), constraint_direction_one_gps))
+            if gs.ndim(state) > 1:
+                n_states = state.shape[0]
+                rot = self.rotation_matrix(- ang_incr)
+                rotated_incr = gs.einsum(
+                    'ikj, ik -> ij', rot, pos_incr).reshape(n_states, 2, 1)
+                constraint_direction_one_gps = gs.matmul(tangent_base, rotated_incr)
+                constraint_direction = gs.concatenate(
+                    [constraint_direction_one_gps for _ in range(self.nb_gps)], axis=1)
+                constrained_value = gs.zeros((state.shape[0], self.dim, 1))
+                return constraint_direction, constrained_value
+            rot = self.rotation_matrix(- ang_incr)
+            constraint_direction_one_gps = tangent_base.dot(rot.dot(pos_incr)).reshape(2, 1)
+            constrained_value = gs.vstack((gs.zeros((1, 1)), constraint_direction_one_gps))
             constraint_direction = gs.vstack([constraint_direction_one_gps for _ in range(self.nb_gps)])
         else:
             raise ValueError('Constraint not implemented')
@@ -382,12 +390,20 @@ class Localization:
     def compose_increments(cumul_incr, new_incr):
         time_incr, pos_incr, ang_incr = Localization.split_input(cumul_incr)
         dt, linear_vel, angular_vel = Localization.split_input(new_incr)
-        new_pos_incr = dt * linear_vel
+        if gs.ndim(new_incr) > 1:
+            dt = dt[0]
+        local_pos_incr = dt * linear_vel
         new_ang_incr = dt * angular_vel
         cumul_rotation = Localization.rotation_matrix(ang_incr)
+        if gs.ndim(new_incr) > 1:
+            new_pos_incr = gs.einsum('ijk, ik -> ij', cumul_rotation, local_pos_incr)
+            return np.column_stack(
+                (time_incr + dt,
+                 Localization.regularize_angle(ang_incr + new_ang_incr),
+                 pos_incr + new_pos_incr))
         return gs.concatenate(
             ([time_incr + dt], [ang_incr + new_ang_incr],
-             pos_incr + cumul_rotation.dot(new_pos_incr)))
+             pos_incr + cumul_rotation.dot(local_pos_incr)))
 
 
 class LocalizationEKF(Localization):
@@ -614,6 +630,10 @@ class KalmanFilterConstraints(KalmanFilter):
         super(KalmanFilterConstraints, self).__init__(model)
         self.cumulative_increment = gs.zeros(model.dim_input)
 
+    def vectorize(self, n_states):
+        super(KalmanFilterConstraints, self).vectorize(n_states)
+        self.cumulative_increment = gs.array([self.cumulative_increment] * n_states)
+
     def propagate(self, input):
         super(KalmanFilterConstraints, self).propagate(input)
         self.cumulative_increment = self.model.compose_increments(
@@ -626,20 +646,23 @@ class KalmanFilterConstraints(KalmanFilter):
 
         if gs.ndim(self.state) > 1:
             n_states = self.state.shape[0]
-            estimate_cov = gs.einsum(
+            innovation_cov = gs.einsum(
                 'ijk, ikl, ilm -> ijm', H, self.covariance, H.transpose(0, 2, 1))
-            innovation_info = gs.linalg.inv(estimate_cov + N)
+            innovation_info = gs.linalg.inv(innovation_cov + N)
             kalman_gain = gs.einsum(
                 'ijk, ikl, ilm -> ijm', self.covariance, H.transpose(0, 2, 1),
                 innovation_info)
             scale = gs.einsum(
                 'ijk, ikl, ilm -> ijm', constraint_dir.transpose(0, 2, 1), innovation_info, constraint_dir)
-            projection_term = gs.einsum(
-                'ijk, ikl, ilm -> ijm', constraint_dir, gs.linalg.inv(scale),
-                constraint_dir.transpose(0, 2, 1))
-            projection_factor = gs.einsum('ijk, ikl -> ijl', projection_term, innovation_info)
-            id_factor = gs.array([gs.eye(self.model.dim_obs)] * n_states)
-            state_gain = gs.einsum('ijk, ikl -> ijl', kalman_gain, id_factor - projection_factor)
+            inv_scale = gs.linalg.inv(scale)
+            constraint_discrepancy = constrained_val - gs.einsum(
+                'ijk, ikl -> ijl', kalman_gain, constraint_dir)
+            state_gain = kalman_gain + gs.einsum(
+                'ijk, ikl, ilm, imn -> ijn',
+                constraint_discrepancy,
+                inv_scale,
+                constraint_dir.transpose(0, 2, 1),
+                innovation_info)
 
         else:
             innovation_cov = H.dot(self.covariance).dot(H.T) + N
@@ -650,9 +673,6 @@ class KalmanFilterConstraints(KalmanFilter):
             constraint_discrepancy = constrained_val - kalman_gain.dot(constraint_dir)
             state_gain = kalman_gain + constraint_discrepancy.dot(
                 inv_scale).dot(constraint_dir.T).dot(innovation_info)
-            print(constraint_dir)
-            print(constrained_val)
-            a+1
         return kalman_gain, state_gain, constraint_discrepancy, inv_scale
 
     def update(self, observation):
@@ -666,10 +686,10 @@ class KalmanFilterConstraints(KalmanFilter):
             id_factor = gs.array([gs.eye(self.model.dim)] * n_states)
             kalman_cov_upd = gs.einsum(
                 'ijk, ikl -> ijl', id_factor - gain_factor, self.covariance)
-            projection_upd = gs.einsum(
-                'ijk, ikl, ilm -> ijm', kalman_gain, projection_term,
-                kalman_gain.transpose(0, 2, 1))
-            self.covariance = kalman_cov_upd + projection_upd
+            constraint_upd = gs.einsum(
+                'ijk, ikl, ilm -> ijm', constraint_discrepancy, inv_scale,
+                constraint_discrepancy.transpose(0, 2, 1))
+            self.covariance = kalman_cov_upd + constraint_upd
             state_upd = gs.einsum('ijk, ik -> ij', state_gain, innovation)
             self.state = self.model.update(self.state, state_upd)
             # covariance_correction = self.model.ad_chi(state_upd)
@@ -680,16 +700,15 @@ class KalmanFilterConstraints(KalmanFilter):
                 self.covariance)
             self.covariance = kalman_cov_upd + constraint_discrepancy.dot(inv_scale).dot(
                 constraint_discrepancy.T)
-            print(state_gain)
             self.state = self.model.update(self.state, state_gain.dot(innovation))
             # covariance_correction = self.model.ad_chi(state_gain.dot(innovation))
             # self.covariance = covariance_correction.dot(self.covariance).dot(covariance_correction.T)
 
-        self.cumulative_increment = gs.zeros(self.model.dim_input)
+        self.cumulative_increment = gs.zeros_like(self.cumulative_increment)
 
 
-nb_gps = 2
-obs_corruption_mode = None
+nb_gps = 3
+obs_corruption_mode = 'both'
 input_corruption_mode = 'rotation'
 model = Localization(nb_gps=nb_gps)
 # model = LocalizationEKF(nb_gps=nb_gps)
@@ -698,17 +717,17 @@ filter_cons = KalmanFilterConstraints(model)
 
 n_traj = 4000
 obs_freq = 50
-dt = 0.1
-P0 = gs.array([.1, 10., 10.])
+dt = .1
+P0 = gs.array([1., 10., 10.])
 P0 = np.diag(P0)
 # Q = np.diag([1e-4, 1e-4, 1e-6])
 Q = 0.0001 * gs.eye(3)
-N = 0.01 * gs.eye(2 * nb_gps)
+N = 1. * gs.eye(2 * nb_gps)
 obs_corruption_values = {None: None,
                          'distance': 1.2,
                          'angle': -0.1}
 input_corruption_values = {None: None,
-                           'rotation': 0.1}
+                           'rotation': 0.2}
 obs_corruption_values['both'] = [obs_corruption_values['distance'], obs_corruption_values['angle']]
 model.set_corruption_modes(obs_mode=obs_corruption_mode, input_mode=input_corruption_mode)
 obs_corruption_value = obs_corruption_values[obs_corruption_mode]
@@ -720,7 +739,7 @@ true_state = gs.array([0, 0, 0])
 # initial_state = true_state + 2*np.diag(P0)
 initial_state = true_state + np.random.multivariate_normal([0,0,0], P0)
 
-true_inputs = [gs.array([dt, 0.5, 0.5, 0.]) for _ in range(n_traj)]
+true_inputs = [gs.array([dt, 10., 10., 0.]) for _ in range(n_traj)]
 # true_inputs = [gs.array([dt, .2, 0., 0.]) for _ in range(n_traj)]
 # true_inputs = [gs.array([dt, .2, 0., 0.]) for _ in range(n_traj//2)] + [gs.array([0.1, 0., -.2, 0.]) for _ in range(n_traj//2, n_traj)]
 
