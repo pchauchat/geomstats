@@ -312,6 +312,8 @@ class Localization:
                     (n_states, 2, 1)), angle_dir[:, :2], gs.zeros((n_states, 2 * (self.nb_gps - 2), 1))), axis=1)
                 constraint_direction = gs.concatenate(
                     (distance_dir, angle_dir), axis=2)
+                constrained_value = gs.zeros((n_states, self.dim, 2))
+                return constraint_direction, constrained_value
             else:
                 angle_dir = gs.vstack((gs.zeros((2, 1)), angle_dir[:2], gs.zeros((2 * (self.nb_gps - 2), 1))))
                 constraint_direction = gs.hstack((distance_dir, angle_dir))
@@ -338,6 +340,8 @@ class Localization:
                 state, incr, input_mode)
             constraint_dirs.append(incr_cons_dir)
             constrained_vals.append(incr_cons_val)
+        if gs.ndim(state) > 1:
+            return gs.concatenate(constraint_dirs, axis=2), gs.concatenate(constrained_vals, axis=2)
         return gs.hstack(constraint_dirs), gs.hstack(constrained_vals)
 
     def set_corruption_modes(self, obs_mode=None, input_mode=None):
@@ -721,10 +725,10 @@ dt = .1
 P0 = gs.array([1., 10., 10.])
 P0 = np.diag(P0)
 # Q = np.diag([1e-4, 1e-4, 1e-6])
-Q = 0.0001 * gs.eye(3)
+Q = 0.01 * gs.eye(3)
 N = 1. * gs.eye(2 * nb_gps)
 obs_corruption_values = {None: None,
-                         'distance': 1.2,
+                         'distance': 1.01,
                          'angle': -0.1}
 input_corruption_values = {None: None,
                            'rotation': 0.2}
