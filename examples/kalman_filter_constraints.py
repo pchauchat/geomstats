@@ -256,7 +256,9 @@ class Localization:
                 constraint_direction_one_gps = gs.matmul(tangent_base, rotated_incr)
                 constraint_direction = gs.concatenate(
                     [constraint_direction_one_gps for _ in range(self.nb_gps)], axis=1)
-                constrained_value = gs.zeros((state.shape[0], self.dim, 1))
+                constrained_value = gs.concatenate(
+                    (gs.zeros((n_states, self.group.rotations.dim, 1)),
+                    constraint_direction_one_gps), axis=1)
                 return constraint_direction, constrained_value
             rot = self.rotation_matrix(- ang_incr)
             constraint_direction_one_gps = tangent_base.dot(rot.dot(pos_incr)).reshape(2, 1)
