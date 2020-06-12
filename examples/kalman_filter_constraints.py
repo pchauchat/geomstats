@@ -711,8 +711,8 @@ class KalmanFilterConstraints(KalmanFilter):
         self.cumulative_increment = gs.zeros_like(self.cumulative_increment)
 
 
-nb_gps = 3
-obs_corruption_mode = 'both'
+nb_gps = 1
+obs_corruption_mode = None
 input_corruption_mode = 'rotation'
 model = Localization(nb_gps=nb_gps)
 # model = LocalizationEKF(nb_gps=nb_gps)
@@ -720,18 +720,18 @@ filter = KalmanFilter(model)
 filter_cons = KalmanFilterConstraints(model)
 
 n_traj = 4000
-obs_freq = 50
+obs_freq = 100
 dt = .1
-P0 = gs.array([1., 10., 10.])
+P0 = gs.array([.01, 10., 10.])
 P0 = np.diag(P0)
 # Q = np.diag([1e-4, 1e-4, 1e-6])
 Q = 0.01 * gs.eye(3)
-N = 1. * gs.eye(2 * nb_gps)
+N = 10. * gs.eye(2 * nb_gps)
 obs_corruption_values = {None: None,
                          'distance': 1.01,
                          'angle': -0.1}
 input_corruption_values = {None: None,
-                           'rotation': 0.2}
+                           'rotation': 0.5}
 obs_corruption_values['both'] = [obs_corruption_values['distance'], obs_corruption_values['angle']]
 model.set_corruption_modes(obs_mode=obs_corruption_mode, input_mode=input_corruption_mode)
 obs_corruption_value = obs_corruption_values[obs_corruption_mode]
