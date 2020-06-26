@@ -1,5 +1,5 @@
 import os
-os.environ['GEOMSTATS_BACKEND'] = 'numpy'  # NOQA
+os.environ['GEOMSTATS_BACKEND'] = 'tensorflow'  # NOQA
 import sys
 import matplotlib.pyplot as plt
 import numpy as np
@@ -173,8 +173,8 @@ class Localization:
         if gs.ndim(input) > 1:
             n_inputs = input.shape[0]
             return gs.sqrt(dt[0]) * gs.array([gs.eye(self.dim_noise)] * n_inputs)
-        return gs.sqrt(dt) * gs.eye(self.dim_noise)
-        # return dt * gs.eye(self.dim_noise)
+        # return gs.sqrt(dt) * gs.eye(self.dim_noise)
+        return dt * gs.eye(self.dim_noise)
 
     def observation_jacobian(self, state, observation):
         jac = gs.tile(gs.eye(2, 3, 1), (nb_gps, 1))
@@ -384,7 +384,7 @@ class Localization:
         if mode == 'None':
             pass
         elif mode == 'distance':
-            corrupted_obs[:2] = value * corrupted_obs[:2]
+            corrupted_obs[:2] = (1 + value) * corrupted_obs[:2]
         elif mode == 'angle':
             corrupted_obs[:2] = self.rotation_matrix(- value).dot(corrupted_obs[:2])
         elif mode == 'both':
@@ -481,9 +481,11 @@ class LocalizationEKF(Localization):
             n_state = state.shape[0]
             speed_jacobian = vectorized_block_diag(
                 gs.ones((n_state, 1, 1)), rot)
-            return gs.sqrt(dt) * speed_jacobian
+            # return gs.sqrt(dt) * speed_jacobian
+            return dt * speed_jacobian
         speed_jacobian = block_diag(1, rot)
-        return gs.sqrt(dt) * speed_jacobian
+        # return gs.sqrt(dt) * speed_jacobian
+        return dt * speed_jacobian
 
     def get_measurement_noise_cov(self, state, observation_cov):
         return observation_cov
@@ -495,26 +497,68 @@ class LocalizationEKF(Localization):
         expected = gs.tile(state[1:], self.nb_gps)
         return observation - expected
 
-    def get_constraint(self, state, mode=None):
-        if mode is None:
-            mode = self.obs_corruption_mode
-        if mode == 'distance':
+    def _get_input_constraint(self, state, incr, input_mode):
+        if input_mode == 'rotation':
+            _, pos_incr, ang_incr = self.split_input(incr)
+            theta, _, _ = self.split_state(state)
+            tangent_base = gs.array([[0, -1],
+                                     [1, 0]])
             if gs.ndim(state) > 1:
                 n_states = state.shape[0]
-                constraint_direction = state[:, 1:].reshape(
-                    n_states, 2, 1)
-                other_gps = gs.zeros((n_states, 2 * (self.nb_gps - 1), 1))
+                rot = self.rotation_matrix(theta)
+                rotated_incr = gs.einsum(
+                    'ikj, ik -> ij', rot, pos_incr).reshape(n_states, 2, 1)
+                constraint_direction_one_gps = gs.matmul(tangent_base, rotated_incr)
                 constraint_direction = gs.concatenate(
-                    (constraint_direction, other_gps), axis=1)
+                    [constraint_direction_one_gps for _ in range(self.nb_gps)], axis=1)
+                constrained_value = gs.concatenate(
+                    (gs.zeros((n_states, self.group.rotations.dim, 1)),
+                     constraint_direction_one_gps), axis=1)
+                return constraint_direction, constrained_value
+            rot = self.rotation_matrix(theta)
+            constraint_direction_one_gps = tangent_base.dot(rot.dot(pos_incr)).reshape(2, 1)
+            constrained_value = gs.vstack((gs.zeros((1, 1)), constraint_direction_one_gps))
+            constraint_direction = gs.vstack([constraint_direction_one_gps for _ in range(self.nb_gps)])
+
+        elif input_mode == 'scale':
+            _, pos_incr, ang_incr = self.split_input(incr)
+            theta, _, _ = self.split_state(state)
+            if gs.ndim(state) > 1:
+                n_states = state.shape[0]
+                rot = self.rotation_matrix(theta)
+                constraint_direction_one_gps = gs.einsum(
+                    'ikj, ik -> ij', rot, pos_incr).reshape(n_states, 2, 1)
+                constraint_direction = gs.concatenate(
+                    [constraint_direction_one_gps for _ in range(self.nb_gps)], axis=1)
+                constrained_value = gs.concatenate(
+                    (gs.zeros((n_states, self.group.rotations.dim, 1)),
+                     constraint_direction_one_gps), axis=1)
+                return constraint_direction, constrained_value
+            rot = self.rotation_matrix(theta)
+            constraint_direction_one_gps = rot.dot(pos_incr).reshape(2, 1)
+            constrained_value = gs.vstack((gs.zeros((1, 1)), constraint_direction_one_gps))
+            constraint_direction = gs.vstack([constraint_direction_one_gps for _ in range(self.nb_gps)])
+        else:
+            raise ValueError('Constraint not implemented')
+
+        return constraint_direction, constrained_value
+
+    def _get_obs_constraint(self, state, obs_mode):
+        if obs_mode == 'distance':
+            if gs.ndim(state) > 1:
+                n_states = state.shape[0]
+                constraint_direction = state[:, 1:].reshape(n_states, 2, 1)
+                other_gps = gs.zeros((n_states, 2 * (self.nb_gps - 1), 1))
+                constraint_direction = gs.concatenate((constraint_direction, other_gps), axis=1)
                 constrained_value = gs.zeros((state.shape[0], self.dim, 1))
                 return constraint_direction, constrained_value
             constraint_direction = state[1:].reshape(2, 1)
             other_gps = gs.zeros((2 * (self.nb_gps - 1), 1))
             constraint_direction = gs.vstack((constraint_direction, other_gps))
             constrained_value = gs.zeros((self.dim, 1))
-        elif mode == 'angle':
+        elif obs_mode == 'angle':
             tangent_base = gs.array([[0, -1],
-                                       [1, 0]])
+                                     [1, 0]])
             if gs.ndim(state) > 1:
                 n_states = state.shape[0]
                 constraint_direction = gs.matmul(tangent_base, state[:, 1:].reshape(n_states, 2, 1))
@@ -523,30 +567,51 @@ class LocalizationEKF(Localization):
                     (constraint_direction, other_gps), axis=1)
                 constrained_value = gs.zeros((state.shape[0], self.dim, 1))
                 return constraint_direction, constrained_value
-            constraint_direction = (
-                tangent_base.dot(state[1:])).reshape(2, 1)
+            constraint_direction = tangent_base.dot(state[1:]).reshape(2, 1)
             other_gps = gs.zeros((2 * (self.nb_gps - 1), 1))
             constraint_direction = gs.vstack((constraint_direction, other_gps))
+            # constraint_direction = tangent_base.dot(state[1:]).reshape(2, 1)
             constrained_value = gs.zeros((self.dim, 1))
-        elif mode == 'both':
-            distance_dir, _ = self.get_constraint(state, mode='distance')
-            angle_dir, _ = self.get_constraint(state, mode='angle')
+        elif obs_mode == 'both':
+            distance_dir, _ = self._get_obs_constraint(state, obs_mode='distance')
+            angle_dir, _ = self._get_obs_constraint(state, obs_mode='angle')
             if gs.ndim(state) > 1:
                 n_states = state.shape[0]
                 angle_dir = gs.concatenate((gs.zeros(
-                    (n_states, 2, 1)), angle_dir[:, :2], gs.zeros(
-                    (n_states, 2 * (self.nb_gps - 2), 1))), axis=1)
+                    (n_states, 2, 1)), angle_dir[:, :2], gs.zeros((n_states, 2 * (self.nb_gps - 2), 1))), axis=1)
                 constraint_direction = gs.concatenate(
                     (distance_dir, angle_dir), axis=2)
+                constrained_value = gs.zeros((n_states, self.dim, 2))
+                return constraint_direction, constrained_value
             else:
-                angle_dir = gs.vstack((gs.zeros((2, 1)), angle_dir[:2],
-                                       gs.zeros((2 * (self.nb_gps - 2), 1))))
+                angle_dir = gs.vstack((gs.zeros((2, 1)), angle_dir[:2], gs.zeros((2 * (self.nb_gps - 2), 1))))
                 constraint_direction = gs.hstack((distance_dir, angle_dir))
             constrained_value = gs.zeros((self.dim, 2))
         else:
             raise ValueError('Constraint not implemented')
 
         return constraint_direction, constrained_value
+
+    def get_constraint(self, state, incr, input_mode=None, obs_mode=None):
+        if obs_mode is None:
+            obs_mode = self.obs_corruption_mode
+        if input_mode is None:
+            input_mode = self.input_corruption_mode
+        constraint_dirs = list()
+        constrained_vals = list()
+        if obs_mode != 'None':
+            obs_cons_dir, obs_cons_val = self._get_obs_constraint(
+                state, obs_mode)
+            constraint_dirs.append(obs_cons_dir)
+            constrained_vals.append(obs_cons_val)
+        if input_mode != 'None':
+            incr_cons_dir, incr_cons_val = self._get_input_constraint(
+                state, incr, input_mode)
+            constraint_dirs.append(incr_cons_dir)
+            constrained_vals.append(incr_cons_val)
+        if gs.ndim(state) > 1:
+            return gs.concatenate(constraint_dirs, axis=2), gs.concatenate(constrained_vals, axis=2)
+        return gs.hstack(constraint_dirs), gs.hstack(constrained_vals)
 
 
 class KalmanFilter:
@@ -650,6 +715,7 @@ class KalmanFilter:
                 self.covariance)
             self.state = self.model.update(self.state, gain.dot(innovation))
 
+
 class KalmanFilterConstraints(KalmanFilter):
 
     def __init__(self, model):
@@ -724,8 +790,13 @@ class KalmanFilterConstraints(KalmanFilter):
         else:
             kalman_cov_upd = (gs.eye(self.model.dim) - kalman_gain.dot(H)).dot(
                 self.covariance)
+            modified_cov_upd = (gs.eye(self.model.dim) - state_gain.dot(H)).dot(
+                self.covariance)
             self.covariance = kalman_cov_upd + constraint_discrepancy.dot(inv_scale).dot(
                 constraint_discrepancy.T)
+            _, constrained_val = self.model.get_constraint(
+                self.state, self.cumulative_increment)
+            difference = constraint_discrepancy.dot(inv_scale).dot(constrained_val.T)
             self.state = self.model.update(self.state, state_gain.dot(innovation))
             # covariance_correction = self.model.ad_chi(state_gain.dot(innovation))
             # self.covariance = covariance_correction.dot(self.covariance).dot(covariance_correction.T)
@@ -734,40 +805,42 @@ class KalmanFilterConstraints(KalmanFilter):
 
 
 nb_gps = 2
-obs_corruption_mode = 'both'
-input_corruption_mode = None
-model = Localization(nb_gps=nb_gps)
-# model = LocalizationEKF(nb_gps=nb_gps)
+obs_corruption_mode = None
+input_corruption_mode = 'scale'
+# model = Localization(nb_gps=nb_gps)
+model = LocalizationEKF(nb_gps=nb_gps)
 filter = KalmanFilter(model)
 filter_cons = KalmanFilterConstraints(model)
 
-n_traj = 4000
+n_traj = 3000
 obs_freq = 10
 dt = .1
-P0 = gs.array([.01, 10., 10.])
+P0 = gs.array([.1, 10., 10.])
 P0 = np.diag(P0)
 # Q = np.diag([1e-4, 1e-4, 1e-6])
 Q = 0.01 * gs.eye(3)
 N = 1. * gs.eye(2 * nb_gps)
 obs_corruption_values = {None: None,
-                         'distance': 1.1,
-                         'angle': -0.1}
+                         'distance': 0.2,
+                         'angle': -0.05}
 input_corruption_values = {None: None,
-                           'rotation': 0.5}
+                           'rotation': 0.2,
+                           'scale': 0*0.3}
 obs_corruption_values['both'] = [obs_corruption_values['distance'], obs_corruption_values['angle']]
 model.set_corruption_modes(obs_mode=obs_corruption_mode, input_mode=input_corruption_mode)
 obs_corruption_value = obs_corruption_values[obs_corruption_mode]
 input_corruption_value = input_corruption_values[input_corruption_mode]
 initial_covs = (P0, Q, N)
 
-true_state = gs.array([0, 0, 0])
-# true_state = gs.array([0.02, -30., 30.])
+# true_state = gs.array([0, 0, 0])
+true_state = gs.array([0.5, -30., 30.])
 # initial_state = true_state + 2*np.diag(P0)
 initial_state = true_state + np.random.multivariate_normal([0,0,0], P0)
 
 # true_inputs = [gs.array([dt, 10., 10., 0.]) for _ in range(n_traj)]
+# true_inputs = [gs.array([dt, 10., 0., 0.1]) for _ in range(n_traj)]
 # true_inputs = [gs.array([dt, .2, 0., 0.]) for _ in range(n_traj)]
-true_inputs = [gs.array([dt, 10., 0., 0.]) for _ in range(n_traj//2)] + [gs.array([0.1, 0., -10., 0.]) for _ in range(n_traj//2, n_traj)]
+true_inputs = [gs.array([dt, 10., 0., 0.]) for _ in range(n_traj//2)] + [gs.array([dt, 0., -10., 0.]) for _ in range(n_traj//2, n_traj)]
 
 
 true_traj = [1*true_state]
@@ -779,13 +852,13 @@ true_obs = [pose[1:] for pose in true_traj[obs_freq::obs_freq]]
 
 
 plt.figure()
-plt.plot(true_traj[:,1], true_traj[:,2], label='GT')
+plt.plot(true_traj[:,1], true_traj[:,2], marker='.', markevery=n_traj//25, label='GT')
 
 np.random.seed(12345)
-inputs = [model.corrupt_input(incr, input_corruption_value) for incr in true_inputs]
-inputs = [gs.concatenate((incr[:1], np.random.multivariate_normal(incr[1:], Q))) for incr in inputs]
-obs = [model.corrupt_measure(gs.tile(meas, nb_gps), obs_corruption_value) for meas in true_obs]
-obs = [np.random.multivariate_normal(meas, N) for meas in obs]
+inputs_corrupted = [model.corrupt_input(incr, input_corruption_value) for incr in true_inputs]
+inputs = [gs.concatenate((incr[:1], np.random.multivariate_normal(incr[1:], Q))) for incr in inputs_corrupted]
+obs_corrupted = [model.corrupt_measure(gs.tile(meas, nb_gps), obs_corruption_value) for meas in true_obs]
+obs = [np.random.multivariate_normal(meas, N) for meas in obs_corrupted]
 
 
 def estimation(observer, initial_covs, initial_state, inputs, obs):
@@ -840,11 +913,10 @@ n_MC = 50
 start = time()
 initial_state_vectorized = gs.array([
     np.random.multivariate_normal(true_state, P0) for _ in range(n_MC)])
-inputs_vectorized = gs.array([[gs.concatenate((incr[:1], np.random.multivariate_normal(incr[1:], Q))) for incr in true_inputs] for _ in range(n_MC)])
+inputs_vectorized = gs.array([[gs.concatenate((incr[:1], np.random.multivariate_normal(incr[1:], Q))) for incr in inputs_corrupted] for _ in range(n_MC)])
 obs_vectorized = [
-    [model.corrupt_measure(
-        np.random.multivariate_normal(gs.tile(pos, nb_gps), N), obs_corruption_value)
-        for pos in true_obs] for _ in range(n_MC)]
+    [np.random.multivariate_normal(pos, N)
+        for pos in obs_corrupted] for _ in range(n_MC)]
 obs_vectorized = gs.array(obs_vectorized)
 
 traj_test = estimation(filter, initial_covs, initial_state_vectorized[0], inputs_vectorized[0], obs_vectorized[0])
