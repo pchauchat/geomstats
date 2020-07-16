@@ -1,5 +1,5 @@
 import os
-os.environ['GEOMSTATS_BACKEND'] = 'tensorflow'  # NOQA
+os.environ['GEOMSTATS_BACKEND'] = 'numpy'  # NOQA
 import sys
 import matplotlib.pyplot as plt
 import numpy as np
@@ -804,11 +804,11 @@ class KalmanFilterConstraints(KalmanFilter):
         self.cumulative_increment = gs.zeros_like(self.cumulative_increment)
 
 
-nb_gps = 2
-obs_corruption_mode = None
-input_corruption_mode = 'scale'
-# model = Localization(nb_gps=nb_gps)
-model = LocalizationEKF(nb_gps=nb_gps)
+nb_gps = 1
+obs_corruption_mode = 'distance'
+input_corruption_mode = None
+model = Localization(nb_gps=nb_gps)
+# model = LocalizationEKF(nb_gps=nb_gps)
 filter = KalmanFilter(model)
 filter_cons = KalmanFilterConstraints(model)
 
@@ -817,15 +817,15 @@ obs_freq = 10
 dt = .1
 P0 = gs.array([.1, 10., 10.])
 P0 = np.diag(P0)
-# Q = np.diag([1e-4, 1e-4, 1e-6])
-Q = 0.01 * gs.eye(3)
+Q = np.diag([1e-4, 1e-4, 1e-6])
+# Q = 0.01 * gs.eye(3)
 N = 1. * gs.eye(2 * nb_gps)
 obs_corruption_values = {None: None,
                          'distance': 0.2,
                          'angle': -0.05}
 input_corruption_values = {None: None,
                            'rotation': 0.2,
-                           'scale': 0*0.3}
+                           'scale': 0.3}
 obs_corruption_values['both'] = [obs_corruption_values['distance'], obs_corruption_values['angle']]
 model.set_corruption_modes(obs_mode=obs_corruption_mode, input_mode=input_corruption_mode)
 obs_corruption_value = obs_corruption_values[obs_corruption_mode]
@@ -841,6 +841,7 @@ initial_state = true_state + np.random.multivariate_normal([0,0,0], P0)
 # true_inputs = [gs.array([dt, 10., 0., 0.1]) for _ in range(n_traj)]
 # true_inputs = [gs.array([dt, .2, 0., 0.]) for _ in range(n_traj)]
 true_inputs = [gs.array([dt, 10., 0., 0.]) for _ in range(n_traj//2)] + [gs.array([dt, 0., -10., 0.]) for _ in range(n_traj//2, n_traj)]
+true_inputs = [gs.concatenate(([dt], np.random.multivariate_normal(np.zeros(3), 30*gs.eye(3)))) for _ in range(n_traj)]
 
 
 true_traj = [1*true_state]

@@ -1,5 +1,5 @@
 import os
-os.environ['GEOMSTATS_BACKEND'] = 'numpy'  # NOQA
+os.environ['GEOMSTATS_BACKEND'] = 'tensorflow'  # NOQA
 import sys
 import matplotlib.pyplot as plt
 import numpy as np
@@ -716,6 +716,117 @@ class KalmanFilter:
             self.state = self.model.update(self.state, gain.dot(innovation))
 
 
+class InformationFilter:
+
+    def __init__(self, model):
+        self.model = model
+        self.vector = model.group.get_identity()
+        self.information = gs.zeros((self.model.dim, self.model.dim))
+        self.process_noise = gs.zeros(
+            (self.model.dim_noise, self.model.dim_noise))
+        self.measurement_noise = gs.zeros(
+            (self.model.dim_obs, self.model.dim_obs))
+
+    def _vectorize_state(self, n_states):
+        self.state = gs.array([self.state] * n_states)
+
+    def _vectorize_covs(self, n_states):
+        self.information = gs.array([self.information] * n_states)
+        self.process_noise = gs.array([self.process_noise] * n_states)
+        self.measurement_noise = gs.array([self.measurement_noise] * n_states)
+
+    def vectorize(self, n_states):
+        self._vectorize_state(n_states)
+        self._vectorize_covs(n_states)
+
+    def initialise_covariances(self, prior_values, process_values, obs_values):
+        values = [gs.linalg.inv(prior_values), process_values, obs_values]
+        attributes = ['information', 'process_noise', 'measurement_noise']
+        for (index, val) in enumerate(values):
+            if gs.ndim(val) == 1:
+                setattr(self, attributes[index],
+                        algebra_utils.from_vector_to_diagonal_matrix(val))
+            else:
+                setattr(self, attributes[index], val)
+        if gs.ndim(self.state) > 1:
+            self._vectorize_covs(self.state.shape[0])
+
+    def set_rotation(self, new_rot):
+        if gs.ndim(self.state) > 1:
+            # self.state[:, 0] = new_rot
+            if gs.ndim(gs.array(new_rot)) == 0:
+                n_states = self.state.shape[0]
+                new_rot = [new_rot] * n_states
+            self.state = gs.hstack((new_rot, self.state[:, 1:]))
+        else:
+            self.state = gs.concatenate(([new_rot], self.state[1:]))
+
+    def set_position(self, new_pos):
+        if gs.ndim(self.state) > 1:
+            # self.state[:, 0] = new_rot
+            if gs.ndim(gs.array(new_pos)) == 1:
+                n_states = self.state.shape[0]
+                new_pos = [new_pos] * n_states
+            self.state = gs.hstack((self.state[:, :1], new_pos))
+        else:
+            self.state = gs.concatenate((self.state[:1], new_pos))
+
+    def propagate(self, input):
+        Q = self.process_noise
+        F = self.model.propagation_jacobian(self.state, input)
+        F_inv = gs.linalg.inv(F)
+        # G = self.model.noise_jacobian(self.model.propagate(self.state, input), input)
+        G = self.model.noise_jacobian(self.state, input)
+        P = self.covariance
+        if gs.ndim(self.state) > 1:
+            gain = gs.eye(self.dim) + gs.einsum(
+                'ijk, ikl, ilm, imn -> ijn',
+                self.information,
+                F_inv,
+                Q,
+                F_inv.transpose(0, 2, 1))
+            factor = gs.einsum('ijk, ikl, ilm -> ijm',
+                               F_inv.transpose(0, 2, 1),
+                               gs.linalg.inv(gain),
+                               self.information)
+
+            self.vector = a+1
+            self.covariance = prop_cov + noise_cov
+        else:
+            self.covariance = F.dot(P).dot(F.T) + G.dot(Q).dot(G.T)
+        self.state = self.model.propagate(self.state, input)
+
+    def compute_gain(self, observation):
+        N = self.model.get_measurement_noise_cov(
+            self.state, self.measurement_noise)
+        H = self.model.observation_jacobian(self.state, observation)
+        if gs.ndim(self.state) > 1:
+            estimate_cov = gs.einsum(
+                'ijk, ikl, ilm -> ijm', H, self.covariance, H.transpose(0, 2, 1))
+            innovation_info = gs.linalg.inv(estimate_cov + N)
+            return gs.einsum('ijk, ikl, ilm -> ijm', self.covariance,
+                             H.transpose(0, 2, 1), innovation_info)
+        innovation_cov = H.dot(self.covariance).dot(H.T) + N
+        return self.covariance.dot(H.T).dot(gs.linalg.inv(innovation_cov))
+
+    def update(self, observation):
+        innovation = self.model.innovation(self.state, observation)
+        gain = self.compute_gain(observation)
+        H = self.model.observation_jacobian(self.state, observation)
+        if gs.ndim(self.state) > 1:
+            n_states = self.state.shape[0]
+            gain_factor = gs.einsum('ijk, ikl -> ijl', gain, H)
+            id_factor = gs.array([gs.eye(self.model.dim)] * n_states)
+            self.covariance = gs.einsum(
+                'ijk, ikl -> ijl', id_factor - gain_factor, self.covariance)
+            state_upd = gs.einsum('ijk, ik -> ij', gain, innovation)
+            self.state = self.model.update(self.state, state_upd)
+        else:
+            self.covariance = (gs.eye(self.model.dim) - gain.dot(H)).dot(
+                self.covariance)
+            self.state = self.model.update(self.state, gain.dot(innovation))
+
+
 class KalmanFilterConstraints(KalmanFilter):
 
     def __init__(self, model):
@@ -805,24 +916,24 @@ class KalmanFilterConstraints(KalmanFilter):
 
 
 nb_gps = 2
-obs_corruption_mode = 'both'
-input_corruption_mode = None
-model = Localization(nb_gps=nb_gps)
-# model = LocalizationEKF(nb_gps=nb_gps)
+obs_corruption_mode = None
+input_corruption_mode = 'scale'
+# model = Localization(nb_gps=nb_gps)
+model = LocalizationEKF(nb_gps=nb_gps)
 filter = KalmanFilter(model)
 filter_cons = KalmanFilterConstraints(model)
 
-n_traj = 4000
+n_traj = 3000
 obs_freq = 10
 dt = .1
-P0 = gs.array([.01, 10., 10.])
+P0 = gs.array([.1, 10., 10.])
 P0 = np.diag(P0)
 # Q = np.diag([1e-4, 1e-4, 1e-6])
 Q = 0.01 * gs.eye(3)
 N = 1. * gs.eye(2 * nb_gps)
 obs_corruption_values = {None: None,
-                         'distance': 1.1,
-                         'angle': -0.1}
+                         'distance': 0.2,
+                         'angle': -0.05}
 input_corruption_values = {None: None,
                            'rotation': 0.2,
                            'scale': 0*0.3}
@@ -832,14 +943,15 @@ obs_corruption_value = obs_corruption_values[obs_corruption_mode]
 input_corruption_value = input_corruption_values[input_corruption_mode]
 initial_covs = (P0, Q, N)
 
-true_state = gs.array([0, 0, 0])
-# true_state = gs.array([0.02, -30., 30.])
+# true_state = gs.array([0, 0, 0])
+true_state = gs.array([0.5, -30., 30.])
 # initial_state = true_state + 2*np.diag(P0)
 initial_state = true_state + np.random.multivariate_normal([0,0,0], P0)
 
 # true_inputs = [gs.array([dt, 10., 10., 0.]) for _ in range(n_traj)]
+# true_inputs = [gs.array([dt, 10., 0., 0.1]) for _ in range(n_traj)]
 # true_inputs = [gs.array([dt, .2, 0., 0.]) for _ in range(n_traj)]
-true_inputs = [gs.array([dt, 10., 0., 0.]) for _ in range(n_traj//2)] + [gs.array([0.1, 0., -10., 0.]) for _ in range(n_traj//2, n_traj)]
+true_inputs = [gs.array([dt, 10., 0., 0.]) for _ in range(n_traj//2)] + [gs.array([dt, 0., -10., 0.]) for _ in range(n_traj//2, n_traj)]
 
 
 true_traj = [1*true_state]
@@ -851,7 +963,7 @@ true_obs = [pose[1:] for pose in true_traj[obs_freq::obs_freq]]
 
 
 plt.figure()
-plt.plot(true_traj[:,1], true_traj[:,2], label='GT')
+plt.plot(true_traj[:,1], true_traj[:,2], marker='.', markevery=n_traj//25, label='GT')
 
 np.random.seed(12345)
 inputs_corrupted = [model.corrupt_input(incr, input_corruption_value) for incr in true_inputs]
